@@ -98,7 +98,7 @@ static void FDECL(adjust_status_tty, (struct xwindow *, const char *));
 extern const char *status_fieldfmt[MAXBLSTATS];
 extern char *status_vals[MAXBLSTATS];
 extern boolean status_activefields[MAXBLSTATS];
-static long X11_condition_bits;
+static long X11_condition_bits, old_condition_bits;
 static int X11_status_colors[MAXBLSTATS];
 static int hpbar_percent, hpbar_color;
 
@@ -179,7 +179,7 @@ X11_status_init()
 
     for (i = 0; i < MAXBLSTATS; ++i)
         X11_status_colors[i] = NO_COLOR; /* no color */
-    X11_condition_bits = 0L;
+    X11_condition_bits = old_condition_bits = 0L;
     hpbar_percent = 0, hpbar_color = NO_COLOR;
 #endif /* STATUS_HILITES */
     /* let genl_status_init do most of the initialization */
@@ -569,18 +569,24 @@ unsigned long *colormasks;
     }
 
     if (fld == BL_CONDITION) {
-        unsigned long mask = (unsigned long) ptr;
+        unsigned long changed_bits, *condptr = (unsigned long *) ptr;
 
-        for (i = 0; i < SIZE(mask_to_fancyfield); i++)
-            if (mask_to_fancyfield[i].mask == mask)
-                update_fancy_status_field_with_hilites(mask_to_fancyfield[i].ff,
-                    condcolor(mask_to_fancyfield[i].mask, colormasks),
-                    condattr(mask_to_fancyfield[i].mask, colormasks));
+        X11_condition_bits = *condptr;
+        /* process the bits that are different from last time */
+        changed_bits = (X11_condition_bits ^ old_condition_bits);
+        if (changed_bits) {
+            for (i = 0; i < SIZE(mask_to_fancyfield); i++)
+                if ((changed_bits & mask_to_fancyfield[i].mask) != 0L)
+                    update_fancy_status_field_with_hilites(mask_to_fancyfield[i].ff,
+                        condcolor(mask_to_fancyfield[i].mask, colormasks),
+                        condattr(mask_to_fancyfield[i].mask, colormasks));
+            old_condition_bits = X11_condition_bits; /* remember 'On' bits */
+        }
     } else {
         for (i = 0; i < SIZE(bl_to_fancyfield); i++)
             if (bl_to_fancyfield[i].bl == fld)
                 update_fancy_status_field_with_hilites(bl_to_fancyfield[i].ff,
-                    color & 0xff, color >> 8 & 0xff);
+                    color & 0xf, color >> 8 & 0xff);
     }
 }
 
@@ -938,6 +944,7 @@ struct X_status_value {
     boolean set;        /* if highlighted */
     boolean after_init; /* don't highlight on first change (init) */
     boolean inverted_hilite; /* if highlighted due to hilite_status inverse rule */
+    Pixel default_fg;   /* what FG color it initialized with */
 };
 
 /* valid type values */
@@ -1246,7 +1253,6 @@ long new_value;
     if (attr_rec->type != SV_NAME && attr_rec != &shown_stats[F_TIME]) {
         if (attr_rec->after_init) {
             if (!attr_rec->set) {
-
                 /* But don't hilite if inverted from status_hilite since
                    it will already be hilited by apply_hilite_attributes(). */
                 if (!attr_rec->inverted_hilite) {
@@ -1259,6 +1265,8 @@ long new_value;
             }
             attr_rec->turn_count = 0;
         } else {
+            XtSetArg(args[0], XtNforeground, &attr_rec->default_fg);
+            XtGetValues(attr_rec->w, args, ONE);
             attr_rec->after_init = TRUE;
         }
     }
@@ -1269,19 +1277,26 @@ update_color(sv, color)
 struct X_status_value *sv;
 int color;
 {
-    Pixel pixel;
+    Pixel pixel = 0;
     Arg args[1];
     XrmValue source;
     XrmValue dest;
 
-    color &= CLR_MAX - 1;
     Widget w = (sv->type == SV_LABEL || sv->type == SV_NAME ? sv->w : get_value_widget(sv->w));
-    char *arg_name = (sv->set || sv->inverted_hilite ? XtNbackground : XtNforeground);
-	source.size = strlen(mapCLR_to_res[color]) + 1;
-	source.addr = (char *)mapCLR_to_res[color];
-	dest.size = sizeof(Pixel);
-	dest.addr = (XPointer)&pixel;
-    if (source.size > 0 && XtConvertAndStore(w, XtRString, &source, XtRPixel, &dest)) {
+    if (color == NO_COLOR) {
+        if (sv->after_init)
+            pixel = sv->default_fg;
+    }
+    else {
+    	source.size = strlen(mapCLR_to_res[color]) + 1;
+    	source.addr = (char *)mapCLR_to_res[color];
+    	dest.size = sizeof(Pixel);
+    	dest.addr = (XPointer)&pixel;
+        if (!XtConvertAndStore(w, XtRString, &source, XtRPixel, &dest))
+            pixel = 0;
+    }
+    if (pixel != 0) {
+        char *arg_name = (sv->set || sv->inverted_hilite ? XtNbackground : XtNforeground);
         XtSetArg(args[0], arg_name, pixel);
         XtSetValues(w, args, ONE);
     }
@@ -1312,7 +1327,9 @@ int attributes;
 
     if (sv->inverted_hilite != attr_inversion) {
         sv->inverted_hilite = attr_inversion;
+if (strcmp(sv->name, "Stunned") == 0) printf("Passed first rule\n");
         if (!sv->set) {
+if (strcmp(sv->name, "Stunned") == 0) printf("Passed second rule\n");
             if (sv->type == SV_VALUE)
                 hilight_value(sv->w);
             else
