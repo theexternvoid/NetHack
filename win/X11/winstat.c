@@ -1327,9 +1327,7 @@ int attributes;
 
     if (sv->inverted_hilite != attr_inversion) {
         sv->inverted_hilite = attr_inversion;
-if (strcmp(sv->name, "Stunned") == 0) printf("Passed first rule\n");
         if (!sv->set) {
-if (strcmp(sv->name, "Stunned") == 0) printf("Passed second rule\n");
             if (sv->type == SV_VALUE)
                 hilight_value(sv->w);
             else
